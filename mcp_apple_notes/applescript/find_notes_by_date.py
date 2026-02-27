@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .base_operations import BaseAppleScriptOperations
 from .note_id_utils import NoteIDUtils
@@ -14,6 +14,10 @@ class FindNotesByDateOperations(BaseAppleScriptOperations):
         before: str = "",
     ) -> list[dict[str, str]]:
         """Find notes filtered by creation or modification date.
+
+        Uses AppleScript's native 'whose' clause to push date filtering into
+        the Notes app query engine — much faster than iterating all notes in a
+        loop, especially with large libraries.
 
         Args:
             date_type: Either "created" or "modified" (default: "modified")
@@ -63,49 +67,41 @@ class FindNotesByDateOperations(BaseAppleScriptOperations):
         else:
             date_property = "modification date"
 
-        # Build AppleScript date filter conditions using string comparison on
-        # the ISO-formatted date portion (first 10 chars of the date string).
-        # AppleScript date arithmetic is fragile across locales, so we compare
-        # the date string prefix which is locale-independent when cast via
-        # "as string" in the format "YYYY-MM-DD ..." on macOS.
-        # We use a helper that extracts YYYY-MM-DD from the AppleScript date string.
-        conditions = []
+        # Build the AppleScript 'whose' filter clause.
+        # We construct AppleScript date literals using "date" coercion with a
+        # locale-neutral format: "YYYY-MM-DD HH:MM:SS" which macOS accepts.
+        whose_parts = []
         if after_dt:
-            after_str = after_dt.strftime("%Y-%m-%d")
-            conditions.append(
-                f'text 1 thru 10 of (noteDate as string) >= "{after_str}"'
-            )
+            after_str = after_dt.strftime("%Y-%m-%d 00:00:00")
+            whose_parts.append(f'{date_property} >= date "{after_str}"')
         if before_dt:
-            before_str = before_dt.strftime("%Y-%m-%d")
-            conditions.append(
-                f'text 1 thru 10 of (noteDate as string) <= "{before_str}"'
-            )
+            # Include the full before day by using end-of-day
+            before_end = before_dt.replace(hour=23, minute=59, second=59)
+            before_str = before_end.strftime("%Y-%m-%d %H:%M:%S")
+            whose_parts.append(f'{date_property} <= date "{before_str}"')
 
-        filter_condition = " and ".join(conditions)
+        whose_clause = " and ".join(whose_parts)
 
         script = f"""
         tell application "Notes"
             try
                 set primaryAccount to account "iCloud"
+                -- Use 'whose' to let Notes filter natively — much faster than looping
+                set matchingNotes to (every note of primaryAccount whose {whose_clause})
                 set outputLines to {{}}
 
-                repeat with currentNote in every note of primaryAccount
-                    set noteDate to {date_property} of currentNote
-                    -- noteDate as string on macOS is "YYYY-MM-DD HH:MM:SS +ZZZZ"
-                    set noteDateStr to noteDate as string
-                    if {filter_condition} then
-                        set noteName to name of currentNote as string
-                        set noteID to id of currentNote as string
+                repeat with currentNote in matchingNotes
+                    set noteName to name of currentNote as string
+                    set noteID to id of currentNote as string
+                    set noteFolder to "Notes"
+                    try
+                        set noteFolder to name of container of currentNote as string
+                    on error
                         set noteFolder to "Notes"
-                        try
-                            set noteFolder to name of container of currentNote as string
-                        on error
-                            set noteFolder to "Notes"
-                        end try
-                        set creationDate to creation date of currentNote as string
-                        set modDate to modification date of currentNote as string
-                        set outputLines to outputLines & {{noteName & "|||" & noteID & "|||" & noteFolder & "|||" & creationDate & "|||" & modDate}}
-                    end if
+                    end try
+                    set creationDate to creation date of currentNote as string
+                    set modDate to modification date of currentNote as string
+                    set outputLines to outputLines & {{noteName & "|||" & noteID & "|||" & noteFolder & "|||" & creationDate & "|||" & modDate}}
                 end repeat
 
                 set AppleScript's text item delimiters to return

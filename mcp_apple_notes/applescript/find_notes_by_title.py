@@ -11,6 +11,12 @@ class FindNotesByTitleOperations(BaseAppleScriptOperations):
     ) -> list[dict[str, str]]:
         """Find notes whose title contains (or exactly matches) the given string.
 
+        Uses AppleScript's native 'whose' clause for the contains case so the
+        Notes app filters the list natively — much faster than a manual loop
+        over every note, especially with large libraries.
+
+        For exact match, 'whose name is' is used (also native).
+
         Args:
             title: The title text to search for
             exact: If True, requires an exact case-sensitive match.
@@ -31,31 +37,31 @@ class FindNotesByTitleOperations(BaseAppleScriptOperations):
         escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
 
         if exact:
-            match_condition = f'noteName is equal to "{escaped_title}"'
+            whose_clause = f'whose name is "{escaped_title}"'
         else:
-            # AppleScript `contains` is case-insensitive by default
-            match_condition = f'noteName contains "{escaped_title}"'
+            # 'contains' in a whose clause is case-insensitive in AppleScript
+            whose_clause = f'whose name contains "{escaped_title}"'
 
         script = f"""
         tell application "Notes"
             try
                 set primaryAccount to account "iCloud"
+                -- Use 'whose' to let Notes filter natively — much faster than looping
+                set matchingNotes to (every note of primaryAccount {whose_clause})
                 set outputLines to {{}}
 
-                repeat with currentNote in every note of primaryAccount
+                repeat with currentNote in matchingNotes
                     set noteName to name of currentNote as string
-                    if {match_condition} then
-                        set noteID to id of currentNote as string
+                    set noteID to id of currentNote as string
+                    set noteFolder to "Notes"
+                    try
+                        set noteFolder to name of container of currentNote as string
+                    on error
                         set noteFolder to "Notes"
-                        try
-                            set noteFolder to name of container of currentNote as string
-                        on error
-                            set noteFolder to "Notes"
-                        end try
-                        set creationDate to creation date of currentNote as string
-                        set modDate to modification date of currentNote as string
-                        set outputLines to outputLines & {{noteName & "|||" & noteID & "|||" & noteFolder & "|||" & creationDate & "|||" & modDate}}
-                    end if
+                    end try
+                    set creationDate to creation date of currentNote as string
+                    set modDate to modification date of currentNote as string
+                    set outputLines to outputLines & {{noteName & "|||" & noteID & "|||" & noteFolder & "|||" & creationDate & "|||" & modDate}}
                 end repeat
 
                 set AppleScript's text item delimiters to return
