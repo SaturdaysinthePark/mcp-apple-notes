@@ -1,7 +1,24 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from .base_operations import BaseAppleScriptOperations
 from .note_id_utils import NoteIDUtils
+
+# AppleScript's epoch anchor as a naive local-time datetime.
+# "January 1, 2001 00:00:00" in local time matches how AppleScript
+# stores and compares dates internally on macOS.
+_AS_EPOCH_LOCAL = datetime(2001, 1, 1, 0, 0, 0)
+
+
+def _to_as_seconds(dt: datetime) -> int:
+    """Convert a naive local datetime to seconds since AppleScript's epoch.
+
+    AppleScript's 'date "January 1, 2001"' resolves to midnight local time,
+    so we compute the delta in local time — no timezone conversion needed.
+    The result is a plain integer we embed directly in the script.
+    """
+    # Strip any tzinfo so arithmetic stays in local time
+    naive = dt.replace(tzinfo=None)
+    return int((naive - _AS_EPOCH_LOCAL).total_seconds())
 
 
 class FindNotesByDateOperations(BaseAppleScriptOperations):
@@ -15,9 +32,15 @@ class FindNotesByDateOperations(BaseAppleScriptOperations):
     ) -> list[dict[str, str]]:
         """Find notes filtered by creation or modification date.
 
-        Uses AppleScript's native 'whose' clause to push date filtering into
-        the Notes app query engine — much faster than iterating all notes in a
-        loop, especially with large libraries.
+        Uses AppleScript's native 'whose' clause with epoch-based date arithmetic
+        to push date filtering into the Notes app query engine — much faster than
+        iterating all notes in a loop, especially with large libraries.
+
+        Date literals like date "2026-02-27" are locale-dependent and silently
+        fail on many macOS systems. Instead we compute seconds since AppleScript's
+        epoch (2001-01-01 UTC) and use:
+            (date "January 1, 2001") + N seconds
+        which is locale-independent and always works.
 
         Args:
             date_type: Either "created" or "modified" (default: "modified")
@@ -67,18 +90,25 @@ class FindNotesByDateOperations(BaseAppleScriptOperations):
         else:
             date_property = "modification date"
 
-        # Build the AppleScript 'whose' filter clause.
-        # We construct AppleScript date literals using "date" coercion with a
-        # locale-neutral format: "YYYY-MM-DD HH:MM:SS" which macOS accepts.
+        # Build locale-independent AppleScript date objects using epoch arithmetic.
+        # "January 1, 2001" is AppleScript's fixed epoch anchor — always parseable
+        # regardless of system locale. We add the offset in seconds.
+        as_epoch_anchor = 'date "January 1, 2001"'
         whose_parts = []
         if after_dt:
-            after_str = after_dt.strftime("%Y-%m-%d 00:00:00")
-            whose_parts.append(f'{date_property} >= date "{after_str}"')
+            # Start of the given day (00:00:00 local)
+            after_start = after_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            after_secs = _to_as_seconds(after_start)
+            whose_parts.append(
+                f'{date_property} >= ({as_epoch_anchor} + {after_secs})'
+            )
         if before_dt:
-            # Include the full before day by using end-of-day
-            before_end = before_dt.replace(hour=23, minute=59, second=59)
-            before_str = before_end.strftime("%Y-%m-%d %H:%M:%S")
-            whose_parts.append(f'{date_property} <= date "{before_str}"')
+            # End of the given day (23:59:59 local)
+            before_end = before_dt.replace(hour=23, minute=59, second=59, microsecond=0)
+            before_secs = _to_as_seconds(before_end)
+            whose_parts.append(
+                f'{date_property} <= ({as_epoch_anchor} + {before_secs})'
+            )
 
         whose_clause = " and ".join(whose_parts)
 
@@ -86,7 +116,7 @@ class FindNotesByDateOperations(BaseAppleScriptOperations):
         tell application "Notes"
             try
                 set primaryAccount to account "iCloud"
-                -- Use 'whose' to let Notes filter natively — much faster than looping
+                -- Use 'whose' with epoch-based dates (locale-independent)
                 set matchingNotes to (every note of primaryAccount whose {whose_clause})
                 set outputLines to {{}}
 
@@ -134,7 +164,8 @@ class FindNotesByDateOperations(BaseAppleScriptOperations):
             return []
 
         notes: list[dict[str, str]] = []
-        for line in result.strip().split("\r"):
+        # AppleScript 'return' separator can be \r or \n depending on macOS version
+        for line in result.strip().replace("\r\n", "\n").replace("\r", "\n").split("\n"):
             line = line.strip()
             if not line:
                 continue
