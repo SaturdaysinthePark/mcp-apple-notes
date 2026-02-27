@@ -8,6 +8,7 @@ from mcp_apple_notes.applescript import (
     FindNotesByDateOperations,
     FindNotesByTitleOperations,
     FolderStructureOperations,
+    GetMostRecentNoteOperations,
     ListNotesOperations,
     MoveFolderOperations,
     MoveNoteOperations,
@@ -119,3 +120,7 @@ class NotesTools:
         return await FindNotesByDateOperations.find_notes_by_date(
             date_type, after, before
         )
+
+    async def get_most_recent_note(self) -> dict[str, str]:
+        """Get the single most recently modified note with its full content."""
+        return await GetMostRecentNoteOperations.get_most_recent_note()

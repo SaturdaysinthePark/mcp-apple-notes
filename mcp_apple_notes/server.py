@@ -595,6 +595,43 @@ async def list_all_notes(ctx: Context) -> str:
 
 
 @mcp.tool()
+async def get_most_recent_note(ctx: Context) -> str:
+    """Get the single most recently modified note with its full content.
+
+    This is the fastest way to retrieve the last note you worked on.
+    It scans modification dates only (no body fetching during scan) and
+    returns the winner's full content in one call.
+
+    Output:
+    - Note name, ID, folder, creation date, modification date
+    - Full note content (HTML body)
+
+    Returns:
+        The most recently modified note with full content
+    """
+    try:
+        note = await notes_tools.get_most_recent_note()
+
+        result = "Most Recently Modified Note:\n\n"
+        result += f"Name: {note.get('name', 'N/A')}\n"
+        result += f"ID: {note.get('note_id', 'N/A')}\n"
+        result += f"Folder: {note.get('folder', 'N/A')}\n"
+        result += f"Created: {note.get('creation_date', 'N/A')}\n"
+        result += f"Modified: {note.get('modification_date', 'N/A')}\n\n"
+        result += f"Content:\n{note.get('body', 'No content available')}\n"
+
+        return result
+
+    except TimeoutError as e:
+        error_msg = str(e)
+        await ctx.error(error_msg)
+        raise RuntimeError(error_msg)
+    except Exception as e:
+        await ctx.error(f"Error getting most recent note: {str(e)}")
+        raise
+
+
+@mcp.tool()
 async def find_notes_by_title(
     ctx: Context,
     title: str = Field(

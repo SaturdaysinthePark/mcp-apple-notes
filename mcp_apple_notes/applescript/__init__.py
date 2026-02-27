@@ -10,6 +10,7 @@ from .delete_note import DeleteNoteOperations
 from .find_notes_by_date import FindNotesByDateOperations
 from .find_notes_by_title import FindNotesByTitleOperations
 from .folder_structure import FolderStructureOperations
+from .get_most_recent_note import GetMostRecentNoteOperations
 from .list_notes import ListNotesOperations
 from .move_folder import MoveFolderOperations
 from .move_note import MoveNoteOperations
@@ -28,6 +29,7 @@ __all__ = [
     "CreateFolderOperations",
     "FindNotesByDateOperations",
     "FindNotesByTitleOperations",
+    "GetMostRecentNoteOperations",
     "ReadNoteOperations",
     "ReadFolderOperations",
     "DeleteFolderOperations",
