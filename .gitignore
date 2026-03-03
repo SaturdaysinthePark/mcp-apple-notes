@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Internal planning and development documents
+IMPROVEMENT_PLANS.md
+IMPROVEMENT_SUMMARY.md
+IMPLEMENTATION_PLAN.md
+FINAL_IMPLEMENTATION_PLAN.md
+ADDITIONAL_IMPROVEMENTS.md
+IMPLEMENTATION_SUMMARY.md

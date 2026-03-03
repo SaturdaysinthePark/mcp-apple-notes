@@ -408,3 +408,85 @@ class ValidationUtils(BaseAppleScriptOperations):
             truncated = truncated[:last_space]
 
         return truncated + "..."
+
+    @staticmethod
+    def validate_checklist_items(items: list[dict]) -> list[dict]:
+        """Validate checklist items structure.
+
+        Args:
+            items: List of dictionaries with 'text' and optional 'checked' fields
+
+        Returns:
+            Validated list of checklist items
+
+        Raises:
+            ValueError: If items structure is invalid
+        """
+        if not items:
+            return []
+
+        if not isinstance(items, list):
+            raise ValueError("Checklist items must be a list")
+
+        validated = []
+        for i, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"Checklist item {i + 1} must be a dictionary with 'text' field"
+                )
+            if "text" not in item:
+                raise ValueError(f"Checklist item {i + 1} must have 'text' field")
+
+            text = str(item["text"]).strip()
+            if not text:
+                raise ValueError(f"Checklist item {i + 1} text cannot be empty")
+
+            validated.append({"text": text, "checked": bool(item.get("checked", False))})
+
+        return validated
+
+    @staticmethod
+    def create_checklist_html(items: list[dict]) -> str:
+        """Create Apple Notes native checklist HTML.
+
+        Apple Notes uses a specific HTML format for interactive checkboxes.
+        Each checkbox item is a list item with a special data attribute.
+
+        Args:
+            items: List of dicts with 'text' and optional 'checked' (bool)
+
+        Returns:
+            HTML string with native Apple Notes checkboxes
+
+        Example:
+            items = [
+                {"text": "Buy milk", "checked": False},
+                {"text": "Buy bread", "checked": True}
+            ]
+            Returns: '<ul><li><div><input type="checkbox">Buy milk</div></li>...</ul>'
+        """
+        if not items:
+            return ""
+
+        # Validate items first
+        validated_items = ValidationUtils.validate_checklist_items(items)
+
+        html_parts = ['<ul>']
+        for item in validated_items:
+            text = item["text"]
+            checked = item["checked"]
+
+            # Apple Notes checkbox format
+            # Uses <input type="checkbox"> with checked attribute
+            if checked:
+                html_parts.append(
+                    f'<li><div><input type="checkbox" checked="true">{text}</div></li>'
+                )
+            else:
+                html_parts.append(
+                    f'<li><div><input type="checkbox">{text}</div></li>'
+                )
+
+        html_parts.append('</ul>')
+
+        return "".join(html_parts)

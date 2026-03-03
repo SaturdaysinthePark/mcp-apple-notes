@@ -27,17 +27,31 @@ async def create_note(
         default="Notes",
         description="Target folder path (e.g., 'Work' or 'Work/Projects/2024'). Defaults to 'Notes'",
     ),
+    checklist_items: list[dict] | None = Field(
+        default=None,
+        description="Optional checklist items with native Apple Notes checkboxes. Each item: {'text': 'Item text', 'checked': true/false}. Example: [{'text': 'Buy milk', 'checked': false}, {'text': 'Buy bread', 'checked': true}]",
+    ),
 ) -> str:
-    """Create a new note with specified name and content.
+    """Create a new note with specified name, content, and optional checklist.
 
     Supported HTML: <h1-h6>, <b><i><u>, <p><div><br>, <ul><ol><li>, <table>, <a>
+    Checklist Support: Native Apple Notes checkboxes (interactive, stateful)
     Best Practices: Use semantic HTML, add <br> tags for spacing, avoid CSS styles
     Folders: Root level or nested paths (up to 5 levels deep)
     Limitations: No special chars in name, no complex CSS/JS
 
-    Example:
+    Example with regular content:
     name: "<h1>Project Report</h1>"
     body: "<p>Status: <b>In Progress</b></p><br><ul><li>Task 1</li></ul>"
+
+    Example with checklist:
+    name: "<h1>Shopping List</h1>"
+    body: "<p>Items to buy:</p>"
+    checklist_items: [
+        {"text": "Milk", "checked": false},
+        {"text": "Bread", "checked": true},
+        {"text": "Eggs", "checked": false}
+    ]
     """
     try:
         # Validate the title content in the name parameter
@@ -45,6 +59,12 @@ async def create_note(
 
         # Combine name (title) and body into complete HTML content with <br> spacing
         combined_content = name + "<br>" + body
+
+        # Add checklist if provided
+        if checklist_items:
+            checklist_html = ValidationUtils.create_checklist_html(checklist_items)
+            combined_content += "<br>" + checklist_html
+
         note = await notes_tools.create_note("note", combined_content, folder_path)
         return str(note)
     except ValueError as e:
@@ -243,11 +263,16 @@ async def update_note(
         ...,
         description="New note body content with appropriate HTML formatting (e.g., '<p>Updated content</p>') For proper spacing between two sections, use <br>.",
     ),
+    checklist_items: list[dict] | None = Field(
+        default=None,
+        description="Optional checklist items with native Apple Notes checkboxes. Each item: {'text': 'Item text', 'checked': true/false}",
+    ),
 ) -> str:
     """Update an existing note by its primary key ID with AppleScript verification.
 
     Required: note_id, note_name, new_name, and new_body parameters
     Supported HTML: <h1-h6>, <b><i><u>, <p><div><br>, <ul><ol><li>, <table>, <a>
+    Checklist Support: Native Apple Notes checkboxes (interactive, stateful)
     Best Practices: Use semantic HTML, add <br> tags for spacing, avoid CSS styles
     Security: AppleScript verifies ID and name match before updating
 
@@ -256,6 +281,13 @@ async def update_note(
     note_name: "Current Note Title"
     new_name: "<h1>Updated Report</h1>"
     new_body: "<p>Status: <b>Complete</b></p><br><ul><li>Done</li></ul>"
+
+    Example with checklist:
+    note_id: "p1234"
+    note_name: "Shopping List"
+    new_name: "<h1>Updated Shopping List</h1>"
+    new_body: "<p>Updated items:</p>"
+    checklist_items: [{"text": "Milk", "checked": true}]
     """
     try:
         # Validate the title content in the new_name parameter
@@ -263,6 +295,12 @@ async def update_note(
 
         # Combine new_name (title) and new_body into complete HTML content with <br> spacing
         combined_content = new_name + "<br>" + new_body
+
+        # Add checklist if provided
+        if checklist_items:
+            checklist_html = ValidationUtils.create_checklist_html(checklist_items)
+            combined_content += "<br>" + checklist_html
+
         updated_note = await notes_tools.update_note(
             note_id, note_name, combined_content
         )
@@ -820,6 +858,10 @@ async def search_notes(
     keywords: str = Field(
         ..., description="Comma-separated keywords to search for in note titles and body content"
     ),
+    max_results: int = Field(
+        default=50,
+        description="Maximum number of results to return (default 50). Limits results to prevent timeouts with large note libraries."
+    ),
 ) -> str:
     """Search for notes containing the specified keywords in their title OR body.
 
@@ -827,11 +869,19 @@ async def search_notes(
     - Searches through all notes in Apple Notes
     - Matches keywords against both note title AND body content
     - Case-insensitive search
+    - Two-phase search strategy: fast title search first, then selective body search
+    - Result limiting to prevent timeouts (default 50 results)
     - Returns note details with the matched keyword
+
+    Performance:
+    - Title matches are found quickly using native filtering
+    - Body search is selective and limited to prevent timeouts
+    - Optimized for large note libraries (500-1000+ notes)
 
     Output Format:
     - Numbered list of matching notes
     - Note names, IDs, folder locations, and matched keyword
+    - Title matches appear first, followed by body matches
     """
     try:
         # Parse keywords from comma-separated string
@@ -842,14 +892,17 @@ async def search_notes(
                 "No valid keywords provided. Please provide comma-separated keywords."
             )
 
-        # Search for notes
-        search_results = await notes_tools.search_notes(keyword_list)
+        # Search for notes with result limiting
+        search_results = await notes_tools.search_notes(keyword_list, max_results)
 
         if not search_results:
             return f"No notes found containing the keywords: {', '.join(keyword_list)}"
 
         # Format the response
-        result = f"Search Results ({len(search_results)} notes found):\n\n"
+        result = f"Search Results ({len(search_results)} notes found"
+        if len(search_results) >= max_results:
+            result += f", limited to {max_results}"
+        result += "):\n\n"
         result += f"Keywords searched: {', '.join(keyword_list)}\n\n"
 
         for i, note in enumerate(search_results, 1):
@@ -859,6 +912,9 @@ async def search_notes(
             result += f"     Matched: {note.get('matched_keyword', 'N/A')}\n"
             result += "\n"
 
+        if len(search_results) >= max_results:
+            result += f"\nNote: Results limited to {max_results}. Use more specific keywords or increase max_results to see more.\n"
+
         return result
 
     except ValueError as e:
@@ -867,6 +923,10 @@ async def search_notes(
         raise ValueError(error_msg)
     except RuntimeError as e:
         error_msg = f"Search failed: {str(e)}"
+        await ctx.error(error_msg)
+        raise RuntimeError(error_msg)
+    except TimeoutError as e:
+        error_msg = f"Search timed out: {str(e)}. Try using more specific keywords or find_notes_by_title for faster results."
         await ctx.error(error_msg)
         raise RuntimeError(error_msg)
     except Exception as e:

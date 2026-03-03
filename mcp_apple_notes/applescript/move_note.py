@@ -178,12 +178,12 @@ class MoveNoteOperations(BaseAppleScriptOperations):
         escaped_full_note_id = ValidationUtils.create_applescript_quoted_string(
             full_note_id
         )
-        escaped_target_folder = ValidationUtils.create_applescript_quoted_string(
-            target_folder_path
-        )
         escaped_note_name = ValidationUtils.create_applescript_quoted_string(note_name)
 
-        # Move operation with name verification
+        # Parse target folder path into components
+        path_components = ValidationUtils.parse_folder_path(target_folder_path)
+
+        # Move operation with name verification and proper folder navigation
         script = f"""
         tell application "Notes"
             try
@@ -197,12 +197,42 @@ class MoveNoteOperations(BaseAppleScriptOperations):
                     return "error:Note name mismatch. Expected: {note_name}, Found: " & actualNoteName
                 end if
                 
-                -- Move the note to target folder
-                move targetNote to folder {escaped_target_folder}
+                -- Navigate to target folder
+                set targetFolder to missing value
+                set pathComponents to {{{", ".join([ValidationUtils.create_applescript_quoted_string(component) for component in path_components])}}}
                 
-                return "success:" & actualNoteName & ", " & "{note_id}" & ", " & {escaped_target_folder}
+                repeat with i from 1 to count of pathComponents
+                    set componentName to item i of pathComponents
+                    
+                    if targetFolder is missing value then
+                        -- Start from root folders in iCloud account
+                        repeat with rootFolder in folders of primaryAccount
+                            if name of rootFolder is componentName then
+                                set targetFolder to rootFolder
+                                exit repeat
+                            end if
+                        end repeat
+                    else
+                        -- Navigate into subfolders
+                        repeat with subFolder in folders of targetFolder
+                            if name of subFolder is componentName then
+                                set targetFolder to subFolder
+                                exit repeat
+                            end if
+                        end repeat
+                    end if
+                end repeat
+                
+                if targetFolder is missing value then
+                    return "error:Target folder not found: {target_folder_path}"
+                end if
+                
+                -- Move the note to target folder object
+                move targetNote to targetFolder
+                
+                return "success:" & actualNoteName & ", " & "{note_id}" & ", " & "{target_folder_path}"
             on error errMsg
-                return "error:iCloud account not available. Please enable iCloud Notes sync - " & errMsg
+                return "error:Failed to move note - " & errMsg
             end try
         end tell
         """
@@ -215,6 +245,8 @@ class MoveNoteOperations(BaseAppleScriptOperations):
                 raise RuntimeError(error_msg)
             elif "Note not found" in error_msg or "not found" in error_msg:
                 raise RuntimeError(f"Note with ID '{note_id}' not found")
+            elif "Target folder not found" in error_msg:
+                raise RuntimeError(error_msg)
             else:
                 raise RuntimeError(f"Failed to move note: {error_msg}")
 

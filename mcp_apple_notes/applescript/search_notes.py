@@ -6,8 +6,14 @@ class SearchNotesOperations(BaseAppleScriptOperations):
     """Operations for searching notes in Apple Notes."""
 
     @staticmethod
-    async def search_notes(keywords: list[str]) -> list[dict[str, str]]:
+    async def search_notes(
+        keywords: list[str], max_results: int = 50
+    ) -> list[dict[str, str]]:
         """Search for notes where any keyword appears in the title OR body.
+
+        Uses a two-phase strategy for performance:
+        1. Fast title search using native 'whose' filtering
+        2. Selective body search with result limiting
 
         Uses a safe ||| delimiter in AppleScript output to avoid the
         comma-splitting bug that broke results for notes/folders containing
@@ -15,6 +21,7 @@ class SearchNotesOperations(BaseAppleScriptOperations):
 
         Args:
             keywords: List of keywords to search for
+            max_results: Maximum number of results to return (default 50)
 
         Returns:
             List of dictionaries with note_id, name, folder, and matched_keyword
@@ -28,47 +35,130 @@ class SearchNotesOperations(BaseAppleScriptOperations):
         ]
         keywords_str = ", ".join([f'"{kw}"' for kw in escaped_keywords])
 
-        # Build the AppleScript command.
-        # Each matching note is emitted as a single line:
-        #   noteName|||noteID|||noteFolder|||matchedKeyword
-        # Lines are joined with the ASCII record separator (return) so the
-        # result is unambiguous regardless of commas in note/folder names.
+        # Build the AppleScript command with two-phase search strategy
+        # Phase 1: Fast title search using native filtering
+        # Phase 2: Selective body search (only if needed and time permits)
         script = f"""
         tell application "Notes"
             try
                 set primaryAccount to account "iCloud"
                 set keywords to {{{keywords_str}}}
+                set maxResults to {max_results}
                 set outputLines to {{}}
-
-                repeat with currentNote in every note of primaryAccount
-                    set noteName to name of currentNote as string
-                    set noteID to id of currentNote as string
-                    set noteBody to body of currentNote as string
-
-                    -- Get the folder name for this note
+                set resultCount to 0
+                
+                -- PHASE 1: Fast title search using native filtering
+                -- This is FAST because AppleScript filters server-side
+                set titleMatchedNotes to {{}}
+                repeat with kw in keywords
+                    set kwStr to kw as string
+                    try
+                        set matches to (every note of primaryAccount whose name contains kwStr)
+                        repeat with matchedNote in matches
+                            -- Check if we already have this note (deduplication)
+                            set noteID to id of matchedNote as string
+                            set alreadyAdded to false
+                            repeat with existingNote in titleMatchedNotes
+                                if id of existingNote as string is noteID then
+                                    set alreadyAdded to true
+                                    exit repeat
+                                end if
+                            end repeat
+                            
+                            if not alreadyAdded then
+                                set end of titleMatchedNotes to matchedNote
+                            end if
+                        end repeat
+                    on error
+                        -- Continue if filtering fails for this keyword
+                    end try
+                end repeat
+                
+                -- Add title matches to output
+                repeat with matchedNote in titleMatchedNotes
+                    if resultCount >= maxResults then
+                        exit repeat
+                    end if
+                    
+                    set noteName to name of matchedNote as string
+                    set noteID to id of matchedNote as string
+                    
+                    -- Get the folder name
                     set noteFolder to "Notes"
                     try
-                        set noteFolder to name of container of currentNote as string
+                        set noteFolder to name of container of matchedNote as string
                     on error
                         set noteFolder to "Notes"
                     end try
-
-                    -- Check if any keyword matches title OR body
-                    set foundKeyword to ""
+                    
+                    -- Find which keyword matched
+                    set matchedKeyword to ""
                     repeat with kw in keywords
                         set kwStr to kw as string
-                        if noteName contains kwStr or noteBody contains kwStr then
-                            set foundKeyword to kwStr
+                        if noteName contains kwStr then
+                            set matchedKeyword to kwStr
                             exit repeat
                         end if
                     end repeat
-
-                    -- If keyword found, emit a delimited line
-                    if foundKeyword is not "" then
-                        set outputLines to outputLines & {{noteName & "|||" & noteID & "|||" & noteFolder & "|||" & foundKeyword}}
-                    end if
+                    
+                    set outputLines to outputLines & {{noteName & "|||" & noteID & "|||" & noteFolder & "|||" & matchedKeyword}}
+                    set resultCount to resultCount + 1
                 end repeat
-
+                
+                -- PHASE 2: Body search (only if we haven't hit max_results)
+                -- Only search bodies of notes NOT already matched by title
+                if resultCount < maxResults then
+                    set remainingSlots to maxResults - resultCount
+                    set allNotes to every note of primaryAccount
+                    set bodySearchCount to 0
+                    
+                    repeat with currentNote in allNotes
+                        if bodySearchCount >= remainingSlots then
+                            exit repeat
+                        end if
+                        
+                        -- Skip if already in title matches
+                        set noteID to id of currentNote as string
+                        set alreadyMatched to false
+                        repeat with titleNote in titleMatchedNotes
+                            if id of titleNote as string is noteID then
+                                set alreadyMatched to true
+                                exit repeat
+                            end if
+                        end repeat
+                        
+                        if not alreadyMatched then
+                            -- Only NOW do we fetch the body (expensive operation)
+                            set noteBody to body of currentNote as string
+                            set noteName to name of currentNote as string
+                            
+                            -- Check if any keyword matches body
+                            set foundKeyword to ""
+                            repeat with kw in keywords
+                                set kwStr to kw as string
+                                if noteBody contains kwStr then
+                                    set foundKeyword to kwStr
+                                    exit repeat
+                                end if
+                            end repeat
+                            
+                            if foundKeyword is not "" then
+                                -- Get the folder name
+                                set noteFolder to "Notes"
+                                try
+                                    set noteFolder to name of container of currentNote as string
+                                on error
+                                    set noteFolder to "Notes"
+                                end try
+                                
+                                set outputLines to outputLines & {{noteName & "|||" & noteID & "|||" & noteFolder & "|||" & foundKeyword}}
+                                set bodySearchCount to bodySearchCount + 1
+                                set resultCount to resultCount + 1
+                            end if
+                        end if
+                    end repeat
+                end if
+                
                 set AppleScript's text item delimiters to return
                 set outputText to outputLines as string
                 set AppleScript's text item delimiters to ""
@@ -79,7 +169,8 @@ class SearchNotesOperations(BaseAppleScriptOperations):
         end tell
         """
 
-        result = await SearchNotesOperations.execute_applescript(script)
+        # Use shorter timeout for search operations
+        result = await SearchNotesOperations.execute_applescript(script, timeout=30)
 
         if result.startswith("error:"):
             raise RuntimeError(f"Failed to search notes: {result[6:]}")

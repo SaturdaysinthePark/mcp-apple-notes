@@ -100,9 +100,16 @@ class NotesTools:
             folder_id, folder_name
         )
 
-    async def search_notes(self, keywords: list[str]) -> list[dict[str, str]]:
-        """Search for notes containing the specified keywords."""
-        return await SearchNotesOperations.search_notes(keywords)
+    async def search_notes(
+        self, keywords: list[str], max_results: int = 50
+    ) -> list[dict[str, str]]:
+        """Search for notes containing the specified keywords.
+        
+        Args:
+            keywords: List of keywords to search for
+            max_results: Maximum number of results to return (default 50)
+        """
+        return await SearchNotesOperations.search_notes(keywords, max_results)
 
     async def find_notes_by_title(
         self, title: str, exact: bool = False

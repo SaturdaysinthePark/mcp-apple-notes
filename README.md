@@ -27,7 +27,13 @@ This fork extends the original with tools designed to work reliably with **large
 | `find_notes_by_date` | Filter notes by creation or modification date range — uses epoch-based date arithmetic (locale-independent) |
 | `get_most_recent_note` | Get the single most recently modified note with full content in one fast call |
 
+### New Features
+- **Native Checklist Support** — Create and update notes with interactive Apple Notes checkboxes. Use `checklist_items` parameter in `create_note` and `update_note` tools.
+- **Nested Folder Support** — `move_note` now properly supports moving notes to nested folders (e.g., "Work/Projects/2024").
+
 ### Bug Fixes & Performance Improvements
+- **`search_notes` Performance Fix** — Implemented two-phase search strategy (title-first, then selective body search) with result limiting. Prevents timeouts with large note libraries (500-1000+ notes). Added `max_results` parameter (default 50) and reduced timeout to 30 seconds for faster failure.
+- **`move_note` Nested Folders** — Fixed AppleScript to properly navigate nested folder paths instead of treating them as literal folder names.
 - **`find_notes_by_date`** — Replaced slow loop-based date iteration with AppleScript's native `whose` clause. Date literals like `date "2026-02-27"` are locale-dependent and silently fail on many macOS systems; this fork uses epoch arithmetic (`date "January 1, 2001" + N seconds`) which is always reliable.
 - **`find_notes_by_title`** — Uses `whose name contains` for native server-side filtering instead of iterating all notes.
 - **`list_all_notes`** — Now returns folder name, creation date, and modification date for each note.
@@ -176,10 +182,24 @@ Returns the single most recently modified note with its full content. No paramet
 
 Search all notes by comma-separated keywords. Matches against both title and body content.
 
+**Performance Optimized:** Uses two-phase search strategy (title-first, then selective body search) to prevent timeouts with large note libraries.
+
 **Parameters:**
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `keywords` | string | Comma-separated keywords (e.g. `"budget, Q1, meeting"`) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `keywords` | string | required | Comma-separated keywords (e.g. `"budget, Q1, meeting"`) |
+| `max_results` | integer | 50 | Maximum number of results to return. Limits results to prevent timeouts. |
+
+**Search Strategy:**
+1. **Phase 1:** Fast title search using native AppleScript filtering (< 5 seconds)
+2. **Phase 2:** Selective body search for remaining slots (only if needed)
+3. **Result Limiting:** Stops at max_results to ensure completion
+4. **Timeout Protection:** 30-second timeout with early termination
+
+**Best Practices:**
+- Use specific keywords for faster results
+- Increase `max_results` if you need more matches
+- For title-only search, use `find_notes_by_title` instead (faster)
 
 ---
 
@@ -188,10 +208,34 @@ Search all notes by comma-separated keywords. Matches against both title and bod
 **HTML Formatting:** `<h1-h6>`, `<b>`, `<i>`, `<u>`, `<p>`, `<div>`, `<br>`, `<ul>`, `<ol>`, `<li>`, `<table>`, `<a>`
 
 **Special Features:**
+- **Native Checklists:** Interactive checkboxes that maintain checked/unchecked state
 - Unicode and emoji support (🚀, ✅, 📝)
 - Nested folder paths (up to 5 levels)
 - Automatic character escaping
 - Rich content with headers, lists, tables
+
+### Creating Notes with Checklists
+
+Use the `checklist_items` parameter in `create_note` or `update_note`:
+
+```python
+# Example: Shopping list with checkboxes
+create_note(
+    name="<h1>Shopping List</h1>",
+    body="<p>Items to buy this week:</p>",
+    checklist_items=[
+        {"text": "Milk", "checked": False},
+        {"text": "Bread", "checked": True},
+        {"text": "Eggs", "checked": False}
+    ]
+)
+```
+
+**Checklist Features:**
+- Interactive checkboxes in Apple Notes
+- Maintains checked/unchecked state
+- Can be mixed with regular content
+- Validates item structure automatically
 
 ---
 
